@@ -105,6 +105,7 @@ import akka.stream.Attributes._
     val futureFlattenSource = name("futureFlattenSource")
     val tickSource = name("tickSource")
     val singleSource = name("singleSource")
+    val flattenConcatSource = name("flattenConcatSource")
     val emptySource = name("emptySource")
     val maybeSource = name("MaybeSource")
     val neverSource = name("neverSource")

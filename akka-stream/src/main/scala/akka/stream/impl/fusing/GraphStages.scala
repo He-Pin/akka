@@ -284,6 +284,32 @@ import akka.stream.stage._
     override def toString: String = "SingleSource"
   }
 
+  final class FlattenConcatSource[T](iterableOnce: IterableOnce[T]) extends GraphStage[SourceShape[T]] {
+    override protected def initialAttributes: Attributes = DefaultAttributes.flattenConcatSource
+    private val out = Outlet[T]("flattenConcat.out")
+    override val shape: SourceShape[T] = SourceShape(out)
+    override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
+      new GraphStageLogic(shape) with OutHandler {
+        private var iterator: Iterator[T] = _
+
+        override def preStart(): Unit = {
+          iterator = iterableOnce.iterator
+        }
+
+        override def onPull(): Unit = {
+          if (iterator.hasNext) {
+            push(out, iterator.next())
+          } else {
+            completeStage()
+          }
+        }
+
+        setHandler(out, this)
+      }
+
+    override def toString: String = "FlattenConcatSource"
+  }
+
   final class FutureFlattenSource[T, M](futureSource: Future[Graph[SourceShape[T], M]])
       extends GraphStageWithMaterializedValue[SourceShape[T], Future[M]] {
     ReactiveStreamsCompliance.requireNonNullElement(futureSource)
