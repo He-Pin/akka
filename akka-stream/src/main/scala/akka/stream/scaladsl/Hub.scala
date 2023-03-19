@@ -561,6 +561,9 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
           val consumer = findAndRemoveConsumer(id, previousOffset)
           addConsumer(consumer, newOffset)
           checkUnblock(previousOffset)
+          if(queue(newOffset & Mask) == Completed) {
+            consumer.callback.invoke(HubCompleted(None))
+          }
         case NeedWakeup(id, previousOffset, currentOffset) =>
           // Move the consumer from its last known offset to its new one. Check if we are unblocked.
           val consumer = findAndRemoveConsumer(id, previousOffset)
