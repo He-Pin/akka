@@ -561,7 +561,7 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
           val consumer = findAndRemoveConsumer(id, previousOffset)
           addConsumer(consumer, newOffset)
           checkUnblock(previousOffset)
-          if(queue(newOffset & Mask) == Completed) {
+          if(queue((previousOffset + 1) & Mask) == Completed) {
             consumer.callback.invoke(HubCompleted(None))
           }
         case NeedWakeup(id, previousOffset, currentOffset) =>
