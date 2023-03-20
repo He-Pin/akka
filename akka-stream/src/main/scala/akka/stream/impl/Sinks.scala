@@ -163,6 +163,7 @@ object FanoutPublisherSink {
       }
 
       override def subscribe(subscriber: Subscriber[_ >: In]): Unit = {
+        ReactiveStreamsCompliance.requireNonNullSubscriber(subscriber)
         stateRef.get() match {
           case Closed(Some(ex)) =>
             subscriber.onError(ex)
