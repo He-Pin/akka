@@ -541,6 +541,7 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
 
     // Cannot complete immediately if there is no space in the queue to put the completion marker
     override def onUpstreamFinish(): Unit = {
+      println("hub onUpstreamFinish")
       if (!isFull) complete()
     }
 
@@ -606,6 +607,7 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
         case UnRegister(id, previousOffset, finalOffset) =>
           if (findAndRemoveConsumer(id, previousOffset) != null)
             activeConsumers -= 1
+          println("activeConsumers:"+activeConsumers)
           if (activeConsumers == 0) {
             if (isClosed(in)) completeStage()
             else if (head != finalOffset) {
@@ -834,6 +836,10 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
                   completeStage()
                 case _ =>
                   push(out, elem.asInstanceOf[T])
+                  if (logic.poll(offset + 1) == Completed) {
+                    completeStage()
+                  }
+                  //
                   untilNextAdvanceSignal -= 1
                   if (untilNextAdvanceSignal == 0) {
                     untilNextAdvanceSignal = DemandThreshold
