@@ -5,7 +5,6 @@
 package akka.stream.impl
 
 import java.util.function.BinaryOperator
-
 import scala.collection.immutable
 import scala.collection.mutable
 import scala.concurrent.Future
@@ -14,10 +13,8 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 import scala.util.control.NonFatal
-
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
-
 import akka.NotUsed
 import akka.annotation.DoNotInherit
 import akka.annotation.InternalApi
@@ -35,6 +32,9 @@ import akka.stream.scaladsl.{ Keep, Sink, SinkQueueWithCancel, Source }
 import akka.stream.scaladsl.BroadcastHub
 import akka.stream.stage._
 import akka.util.ccompat._
+
+import java.util.concurrent.atomic.AtomicReference
+import scala.annotation.tailrec
 
 /**
  * INTERNAL API
@@ -99,6 +99,14 @@ import akka.util.ccompat._
     new PublisherSink[In](attr, amendShape(attr))
 }
 
+@InternalApi
+object FanoutPublisherSink {
+  private trait FanoutPublisherSinkState
+  private case class Open[T](callbackFuture: Future[AsyncCallback[Subscriber[_ >: T]]]) extends FanoutPublisherSinkState
+  private case class Closed(failure: Option[Throwable]) extends FanoutPublisherSinkState
+
+}
+
 /**
  * INTERNAL API
  */
@@ -111,53 +119,82 @@ import akka.util.ccompat._
     val logic: GraphStageLogic with InHandler with Publisher[In] = new GraphStageLogic(shape)
       with InHandler
       with Publisher[In] {
+      import FanoutPublisherSink._
+      private[this] val callbackPromise = Promise[AsyncCallback[Subscriber[_ >: In]]]()
+      private[this] val stateRef = new AtomicReference[FanoutPublisherSinkState](Open(callbackPromise.future))
+
       private val bufferSize = inheritedAttributes.mandatoryAttribute[Attributes.InputBuffer].max
       private val subOutlet = new SubSourceOutlet[In]("FanoutPublisherSink.subSink")
       private var publisherSource: Source[In, NotUsed] = _
-      private val callbackPromise = Promise[AsyncCallback[Subscriber[_ >: In]]]()
 
-      override def onPush(): Unit = subOutlet.push(grab(in))
+      override def onPush(): Unit = {
+        subOutlet.push(grab(in))
+      }
+
       override def onUpstreamFinish(): Unit = {
-        println("onUpstreamFinish")
+        stateRef.getAndSet(Closed(None))
         subOutlet.complete()
       }
       override def onUpstreamFailure(ex: Throwable): Unit = {
-        println("onUpstreamFailure")
+        stateRef.getAndSet(Closed(Some(ex)))
         subOutlet.fail(ex)
       }
 
       subOutlet.setHandler(new OutHandler {
-        override def onPull(): Unit = if (!isClosed(in)) tryPull(in)
-        override def onDownstreamFinish(cause: Throwable): Unit = if (!isClosed(in)) cancel(in, cause)
+        override def onPull(): Unit = if (isClosed(in)) completeStage() else pull(in)
+        override def onDownstreamFinish(cause: Throwable): Unit =
+          if (cause != null) {
+            failStage(cause)
+          } else {
+            completeStage()
+          }
       })
 
       setHandler(in, this)
 
       override def preStart(): Unit = {
-        publisherSource = interpreter.subFusingMaterializer.materialize(
-          Source.fromGraph(subOutlet.source)
-            .toMat(BroadcastHub.sink[In](1, bufferSize))(Keep.right))
-
         callbackPromise.success(getAsyncCallback[Subscriber[_ >: In]](onSubscribe))
-        super.preStart()
+        publisherSource = interpreter.subFusingMaterializer.materialize(
+          Source.fromGraph(subOutlet.source).toMat(BroadcastHub.sink[In](1, bufferSize))(Keep.right))
       }
 
       private def onSubscribe(subscriber: Subscriber[_ >: In]): Unit = {
-        println("start mat sub flow")
         interpreter.subFusingMaterializer.materialize(publisherSource.to(Sink.fromSubscriber(subscriber)))
-        println("mat sub flow done")
       }
 
-      override def subscribe(subscriber: Subscriber[_ >: In]): Unit =
-        callbackPromise.future.onComplete {
-          case Success(callback) =>
-            callback.invokeWithFeedback(subscriber).failed.foreach(_.printStackTrace())(ExecutionContexts.parasitic)
-            println("invoke subscribe")
-          case Failure(exception) => subscriber.onError(exception)
-        }(ExecutionContexts.parasitic)
+      override def subscribe(subscriber: Subscriber[_ >: In]): Unit = {
+        stateRef.get() match {
+          case Closed(Some(ex)) =>
+            subscriber.onError(ex)
+          case Closed(None) =>
+            subscriber.onComplete()
+          case open: Open[In @unchecked] =>
+            open.callbackFuture.onComplete {
+              case Success(callback) =>
+                callback
+                  .invokeWithFeedback(subscriber)
+                  .onComplete {
+                    case Failure(exception) => subscriber.onError(exception)
+                    case Success(_)         => //invoked, waiting materialization
+                  }(ExecutionContexts.parasitic)
+              case Failure(exception) => subscriber.onError(exception)
+            }(ExecutionContexts.parasitic)
+          case _ => throw new IllegalArgumentException("Should not happen")
+        }
+      }
 
       override def postStop(): Unit = {
-        println("postStop")
+        @tailrec
+        def tryClose(): Unit = {
+          stateRef.get() match {
+            case Closed(_) => //do nothing
+            case open =>
+              if (!stateRef.compareAndSet(open, Closed(None))) {
+                tryClose()
+              }
+          }
+        }
+        tryClose()
       }
     }
 
