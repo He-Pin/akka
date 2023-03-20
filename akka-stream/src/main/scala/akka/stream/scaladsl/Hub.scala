@@ -488,7 +488,7 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
   private object RegistrationPending extends HubEvent
   // these 4 next classes can't be final because of SI-4440
   private case class UnRegister(id: Long, previousOffset: Int, finalOffset: Int) extends HubEvent
-  private case class Advance(id: Long, previousOffset: Int) extends HubEvent
+  private case class Advance(id: Long, previousOffset: Int, currentOffset: Int) extends HubEvent
   private case class NeedWakeup(id: Long, previousOffset: Int, currentOffset: Int) extends HubEvent
   private case class Consumer(id: Long, callback: AsyncCallback[ConsumerEvent])
 
@@ -540,7 +540,9 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
     }
 
     // Cannot complete immediately if there is no space in the queue to put the completion marker
-    override def onUpstreamFinish(): Unit = if (!isFull) complete()
+    override def onUpstreamFinish(): Unit = {
+      if (!isFull) complete()
+    }
 
     override def onPush(): Unit = {
       publish(grab(in))
@@ -553,17 +555,26 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
       }
     }
 
+    private def shouldCompleteConsumer(currentOffset: Int): Boolean = {
+      ((currentOffset + 1 == tail) && isClosed(in)) ||
+      (queue((currentOffset + 1) & Mask) == Completed)
+    }
+
+    private def tryCompleteCurrentConsumer(consumer: Consumer, currentOffset: Int): Unit = {
+      if (shouldCompleteConsumer(currentOffset)) {
+        consumer.callback.invoke(HubCompleted(None))
+      }
+    }
+
     private def onEvent(ev: HubEvent): Unit = {
       ev match {
-        case Advance(id, previousOffset) =>
+        case Advance(id, previousOffset, currentOffset) =>
           val newOffset = previousOffset + DemandThreshold
           // Move the consumer from its last known offset to its new one. Check if we are unblocked.
           val consumer = findAndRemoveConsumer(id, previousOffset)
           addConsumer(consumer, newOffset)
           checkUnblock(previousOffset)
-          if(queue((previousOffset + 1) & Mask) == Completed) {
-            consumer.callback.invoke(HubCompleted(None))
-          }
+          tryCompleteCurrentConsumer(consumer, currentOffset)
         case NeedWakeup(id, previousOffset, currentOffset) =>
           // Move the consumer from its last known offset to its new one. Check if we are unblocked.
           val consumer = findAndRemoveConsumer(id, previousOffset)
@@ -710,7 +721,6 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
 
     override def postStop(): Unit = {
       // Notify pending consumers and set tombstone
-
       @tailrec def tryClose(): Unit = state.get() match {
         case Closed(_) => // Already closed, ignore
         case open: Open =>
@@ -824,14 +834,14 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
                   completeStage()
                 case _ =>
                   push(out, elem.asInstanceOf[T])
-                  offset += 1
                   untilNextAdvanceSignal -= 1
                   if (untilNextAdvanceSignal == 0) {
                     untilNextAdvanceSignal = DemandThreshold
                     val previousOffset = previousPublishedOffset
                     previousPublishedOffset += DemandThreshold
-                    hubCallback.invoke(Advance(id, previousOffset))
+                    hubCallback.invoke(Advance(id, previousOffset, offset))
                   }
+                  offset += 1
               }
             }
           }
