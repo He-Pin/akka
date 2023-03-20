@@ -6,9 +6,9 @@ package akka.stream.scaladsl
 
 import scala.collection.immutable
 import scala.concurrent.duration._
-
 import akka.NotUsed
 import akka.stream.testkit._
+import akka.stream.testkit.scaladsl.TestSink
 
 class FlowIteratorSpec extends AbstractFlowIteratorSpec {
   override def testName = "A Flow based on an iterator producing function"
@@ -20,6 +20,55 @@ class FlowIterableSpec extends AbstractFlowIteratorSpec {
   override def testName = "A Flow based on an iterable"
   override def createSource(elements: Int): Source[Int, NotUsed] =
     Source(1 to elements)
+
+  "produce elements to later subscriber" in {
+    val p = Source(1 to 3).runWith(Sink.asPublisher(true))
+    val c1 = TestSubscriber.manualProbe[Int]()
+    val c2 = TestSubscriber.manualProbe[Int]()
+    p.subscribe(c1)
+
+    val sub1 = c1.expectSubscription()
+    sub1.request(1)
+    c1.expectNext(1)
+    c1.expectNoMessage(100.millis)
+    p.subscribe(c2)
+    Thread.sleep(20 * 1000)
+    val sub2 = c2.expectSubscription()
+    sub2.request(3)
+    // element 1 is already gone
+    c2.expectNext(2)
+    c2.expectNext(3)
+    c2.expectComplete()
+    sub1.request(3)
+    c1.expectNext(2)
+    c1.expectNext(3)
+    c1.expectComplete()
+  }
+
+  "produce elements to later subscriber2" in {
+    val p = Source(1 to 3).runWith(Sink.asPublisher(true))
+    val c1 = Source.fromPublisher(p)
+      .runWith(TestSink())
+    val sub1 = c1.expectSubscription()
+    sub1.request(1)
+    c1.expectNext(1)
+    c1.expectNoMessage(100.millis)
+
+    val c2 = Source.fromPublisher(p)
+      .runWith(TestSink())
+
+    Thread.sleep(20 * 1000)
+    val sub2 = c2.expectSubscription()
+    sub2.request(3)
+    // element 1 is already gone
+    c2.expectNext(2)
+    c2.expectNext(3)
+    c2.expectComplete()
+    sub1.request(3)
+    c1.expectNext(2)
+    c1.expectNext(3)
+    c1.expectComplete()
+  }
 
   "produce onError when iterator throws" in {
     val iterable = new immutable.Iterable[Int] {
@@ -132,6 +181,7 @@ abstract class AbstractFlowIteratorSpec extends StreamSpec("""
       c1.expectNext(1)
       c1.expectNoMessage(100.millis)
       p.subscribe(c2)
+      Thread.sleep(20 * 1000)
       val sub2 = c2.expectSubscription()
       sub2.request(3)
       // element 1 is already gone

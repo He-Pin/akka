@@ -114,31 +114,51 @@ import akka.stream.stage._
       private val bufferSize = inheritedAttributes.mandatoryAttribute[Attributes.InputBuffer].max
       private val subOutlet = new SubSourceOutlet[In]("FanoutPublisherSink.subSink")
       private var publisherSource: Source[In, NotUsed] = _
-      private val callbackPromise = Promise[AsyncCallback[Subscriber[_]]]()
+      private val callbackPromise = Promise[AsyncCallback[Subscriber[_ >: In]]]()
 
       override def onPush(): Unit = subOutlet.push(grab(in))
-      override def onUpstreamFinish(): Unit = subOutlet.complete()
-      override def onUpstreamFailure(ex: Throwable): Unit = subOutlet.fail(ex)
+      override def onUpstreamFinish(): Unit = {
+        println("onUpstreamFinish")
+        subOutlet.complete()
+      }
+      override def onUpstreamFailure(ex: Throwable): Unit = {
+        println("onUpstreamFailure")
+        subOutlet.fail(ex)
+      }
 
       subOutlet.setHandler(new OutHandler {
         override def onPull(): Unit = if (!isClosed(in)) tryPull(in)
         override def onDownstreamFinish(cause: Throwable): Unit = if (!isClosed(in)) cancel(in, cause)
       })
+
       setHandler(in, this)
 
       override def preStart(): Unit = {
         publisherSource = interpreter.subFusingMaterializer.materialize(
-          Source.fromGraph(subOutlet.source).toMat(BroadcastHub.sink[In](bufferSize))(Keep.right),
-          attributes)
-        callbackPromise.success(getAsyncCallback[Subscriber[_]] {
-          case sub: Subscriber[_] =>
-            interpreter.subFusingMaterializer
-              .materialize(publisherSource.to(Sink.fromSubscriber(sub.asInstanceOf[Subscriber[_ >: In]])), attributes)
-        })
+          Source.fromGraph(subOutlet.source)
+            .toMat(BroadcastHub.sink[In](1, bufferSize))(Keep.right))
+
+        callbackPromise.success(getAsyncCallback[Subscriber[_ >: In]](onSubscribe))
         super.preStart()
       }
+
+      private def onSubscribe(subscriber: Subscriber[_ >: In]): Unit = {
+        println("start mat sub flow")
+        interpreter.subFusingMaterializer.materialize(publisherSource.to(Sink.fromSubscriber(subscriber)))
+        println("mat sub flow done")
+      }
+
       override def subscribe(subscriber: Subscriber[_ >: In]): Unit =
-        callbackPromise.future.foreach(_.invoke(subscriber))(ExecutionContexts.parasitic)
+        callbackPromise.future.onComplete {
+          case Success(callback) =>
+            callback.invokeWithFeedback(subscriber).failed.foreach(_.printStackTrace())(ExecutionContexts.parasitic)
+            println("invoke subscribe")
+          case Failure(exception) => subscriber.onError(exception)
+        }(ExecutionContexts.parasitic)
+
+      override def postStop(): Unit = {
+        println("postStop")
+      }
     }
 
     (logic, logic)
