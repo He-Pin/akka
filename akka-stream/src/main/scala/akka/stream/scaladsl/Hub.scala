@@ -6,19 +6,20 @@ package akka.stream.scaladsl
 
 import java.util
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.{ AtomicLong, AtomicReference }
+import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReferenceArray
 import scala.annotation.tailrec
 import scala.collection.immutable
 import scala.collection.immutable.Queue
 import scala.collection.mutable.LongMap
-import scala.concurrent.{ Future, Promise }
-import scala.util.{ Failure, Success, Try }
+import scala.concurrent.{Future, Promise}
+import scala.util.{Failure, Success, Try}
 import akka.NotUsed
 import akka.annotation.DoNotInherit
 import akka.annotation.InternalApi
 import akka.dispatch.AbstractNodeQueue
+import akka.dispatch.ExecutionContexts
 import akka.stream._
 import akka.stream.Attributes.LogLevels
 import akka.stream.stage._
@@ -805,7 +806,8 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
                 case previousState @ Open(callbackFuture, registrations) =>
                   val newRegistrations = Consumer(id, callback) :: registrations
                   if (logic.state.compareAndSet(previousState, Open(callbackFuture, newRegistrations))) {
-                    callbackFuture.onComplete(getAsyncCallback(onHubReady).invoke)(materializer.executionContext)
+                    //如果已启动了，应该同步注册才对
+                    callbackFuture.onComplete(getAsyncCallback(onHubReady).invoke)(ExecutionContexts.parasitic)
                   } else register()
               }
             }

@@ -4,7 +4,32 @@
 
 package akka.stream.impl
 
+import akka.NotUsed
+import akka.annotation.DoNotInherit
+import akka.annotation.InternalApi
+import akka.dispatch.ExecutionContexts
+import akka.event.Logging
+import akka.stream.ActorAttributes.StreamSubscriptionTimeout
+import akka.stream.Attributes.InputBuffer
+import akka.stream.Attributes.SourceLocation
+import akka.stream._
+import akka.stream.impl.QueueSink.Output
+import akka.stream.impl.QueueSink.Pull
+import akka.stream.impl.Stages.DefaultAttributes
+import akka.stream.impl.StreamLayout.AtomicModule
+import akka.stream.scaladsl.BroadcastHub
+import akka.stream.scaladsl.Keep
+import akka.stream.scaladsl.Sink
+import akka.stream.scaladsl.SinkQueueWithCancel
+import akka.stream.scaladsl.Source
+import akka.stream.stage._
+import akka.util.ccompat._
+import org.reactivestreams.Publisher
+import org.reactivestreams.Subscriber
+
+import java.util.concurrent.atomic.AtomicReference
 import java.util.function.BinaryOperator
+import scala.annotation.tailrec
 import scala.collection.immutable
 import scala.collection.mutable
 import scala.concurrent.Future
@@ -13,28 +38,6 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 import scala.util.control.NonFatal
-import org.reactivestreams.Publisher
-import org.reactivestreams.Subscriber
-import akka.NotUsed
-import akka.annotation.DoNotInherit
-import akka.annotation.InternalApi
-import akka.dispatch.ExecutionContexts
-import akka.event.Logging
-import akka.stream._
-import akka.stream.ActorAttributes.StreamSubscriptionTimeout
-import akka.stream.Attributes.InputBuffer
-import akka.stream.Attributes.SourceLocation
-import akka.stream.impl.QueueSink.Output
-import akka.stream.impl.QueueSink.Pull
-import akka.stream.impl.Stages.DefaultAttributes
-import akka.stream.impl.StreamLayout.AtomicModule
-import akka.stream.scaladsl.{ Keep, Sink, SinkQueueWithCancel, Source }
-import akka.stream.scaladsl.BroadcastHub
-import akka.stream.stage._
-import akka.util.ccompat._
-
-import java.util.concurrent.atomic.AtomicReference
-import scala.annotation.tailrec
 
 /**
  * INTERNAL API
@@ -150,6 +153,8 @@ object FanoutPublisherSink {
           }
       })
 
+
+
       setHandler(in, this)
 
       override def preStart(): Unit = {
@@ -163,12 +168,15 @@ object FanoutPublisherSink {
       }
 
       override def subscribe(subscriber: Subscriber[_ >: In]): Unit = {
-        ReactiveStreamsCompliance.requireNonNullSubscriber(subscriber)
+        import ReactiveStreamsCompliance._
+        requireNonNullSubscriber(subscriber)
         stateRef.get() match {
           case Closed(Some(ex)) =>
-            subscriber.onError(ex)
+            tryOnSubscribe(subscriber, CancelledSubscription)
+            tryOnError(subscriber, ex)
           case Closed(None) =>
-            subscriber.onComplete()
+            tryOnSubscribe(subscriber, CancelledSubscription)
+            tryOnComplete(subscriber)
           case open: Open[In @unchecked] =>
             open.callbackFuture.onComplete {
               case Success(callback) =>
