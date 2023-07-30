@@ -6,13 +6,12 @@ package akka.stream.impl
 
 import scala.collection.immutable.Map.Map1
 import scala.language.existentials
-
 import akka.annotation.{ DoNotInherit, InternalApi }
 import akka.stream._
 import akka.stream.impl.StreamLayout.AtomicModule
 import akka.stream.impl.TraversalBuilder.{ AnyFunction1, AnyFunction2 }
 import akka.stream.impl.fusing.GraphStageModule
-import akka.stream.impl.fusing.GraphStages.SingleSource
+import akka.stream.impl.fusing.GraphStages.{ FutureSource, IterableSource, SingleSource }
 import akka.stream.scaladsl.Keep
 import akka.util.OptionVal
 
@@ -357,6 +356,43 @@ import akka.util.OptionVal
                         // It would be != EmptyTraversal if mapMaterializedValue was used and then we can't optimize.
                         if ((l.traversalSoFar eq EmptyTraversal) && !l.attributes.isAsync)
                           OptionVal.Some(single)
+                        else OptionVal.None
+                      case _ => OptionVal.None
+                    }
+                  case _ => OptionVal.None
+                }
+              case _ => OptionVal.None
+            }
+          case _ => OptionVal.None
+        }
+    }
+  }
+
+  /**
+   * Try to find `SingleSource` or wrapped such. This is used as a
+   * performance optimization in FlattenConcat and possibly other places.
+   */
+  def getValuePresentedSource[A >: Null](graph: Graph[SourceShape[A], _]): OptionVal[Graph[SourceShape[A], _]] = {
+    def isValuePresentedSource(graph: Graph[SourceShape[_ <: A], _]): Boolean = graph match {
+      case _: SingleSource[_] | _: FutureSource[_] | _: IterableSource[_] | _: JavaStreamSource[_, _] | EmptySource |
+          _: FailedSource[_] =>
+        true
+      case _ => false
+    }
+    graph match {
+      case _ if isValuePresentedSource(graph) => OptionVal.Some(graph)
+      case _ =>
+        graph.traversalBuilder match {
+          case l: LinearTraversalBuilder =>
+            l.pendingBuilder match {
+              case OptionVal.Some(a: AtomicTraversalBuilder) =>
+                a.module match {
+                  case m: GraphStageModule[_, _] =>
+                    m.stage match {
+                      case _ if isValuePresentedSource(m.stage.asInstanceOf[Graph[SourceShape[A], _]]) =>
+                        // It would be != EmptyTraversal if mapMaterializedValue was used and then we can't optimize.
+                        if ((l.traversalSoFar eq EmptyTraversal) && !l.attributes.isAsync)
+                          OptionVal.Some(m.stage.asInstanceOf[Graph[SourceShape[A], _]])
                         else OptionVal.None
                       case _ => OptionVal.None
                     }
