@@ -607,7 +607,7 @@ private[akka] class BroadcastHub[T](startAfterNrOfConsumers: Int, bufferSize: In
         case UnRegister(id, previousOffset, finalOffset) =>
           if (findAndRemoveConsumer(id, previousOffset) != null)
             activeConsumers -= 1
-          println("activeConsumers:"+activeConsumers)
+          println("activeConsumers:" + activeConsumers)
           if (activeConsumers == 0) {
             if (isClosed(in)) completeStage()
             else if (head != finalOffset) {

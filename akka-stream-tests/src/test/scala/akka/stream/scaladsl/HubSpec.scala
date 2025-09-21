@@ -541,8 +541,7 @@ class HubSpec extends StreamSpec {
     }
 
     "broadcast all elements to all consumers" in {
-      val broadcast = Source(1 to 10)
-        .runWith(BroadcastHub.sink[Int])
+      val broadcast = Source(1 to 10).runWith(BroadcastHub.sink[Int])
       val resultOne = broadcast.runWith(Sink.seq) // nothing happening yet
       val resultTwo = broadcast.runWith(Sink.seq)
 

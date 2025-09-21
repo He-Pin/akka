@@ -135,8 +135,7 @@ import akka.stream.stage._
 
       override def preStart(): Unit = {
         publisherSource = interpreter.subFusingMaterializer.materialize(
-          Source.fromGraph(subOutlet.source)
-            .toMat(BroadcastHub.sink[In](1, bufferSize))(Keep.right))
+          Source.fromGraph(subOutlet.source).toMat(BroadcastHub.sink[In](1, bufferSize))(Keep.right))
 
         callbackPromise.success(getAsyncCallback[Subscriber[_ >: In]](onSubscribe))
         super.preStart()
