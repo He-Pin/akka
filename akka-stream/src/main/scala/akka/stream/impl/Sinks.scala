@@ -151,10 +151,10 @@ import akka.stream.stage._
       override def subscribe(subscriber: Subscriber[_ >: In]): Unit =
         callbackPromise.future.onComplete {
           case Success(callback) =>
-            callback.invokeWithFeedback(subscriber).failed.foreach(_.printStackTrace())(ExecutionContexts.parasitic)
+            callback.invokeWithFeedback(subscriber).failed.foreach(_.printStackTrace())(ExecutionContext.parasitic)
             println("invoke subscribe")
           case Failure(exception) => subscriber.onError(exception)
-        }(ExecutionContexts.parasitic)
+        }(ExecutionContext.parasitic)
 
       override def postStop(): Unit = {
         println("postStop")
